@@ -23,14 +23,11 @@ if nbim_file is not None:
         st.success("Both files uploaded successfully!")
         
         # Display tables side by side
-        col1, col2 = st.columns(2)
         
-        with col1:
-            st.markdown("## NBIM File")
-            st.write(nbim_df.T)
-        
-        with col2:
-            st.markdown("## Custody File")
-            st.write(custody_df.T)
+        st.markdown("## NBIM File")
+        st.write(nbim_df)
+    
+        st.markdown("## Custody File")
+        st.write(custody_df)
 else:
     st.info("Please upload the NBIM file first to continue.")
