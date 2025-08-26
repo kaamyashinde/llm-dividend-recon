@@ -116,7 +116,7 @@ class OpenAIClient:
             
             return {
                 "content": content,
-                "usage": asdict(response.usage) if response.usage else None,
+                "usage": response.usage.model_dump() if response.usage else None,
                 "model": response.model,
                 "finish_reason": response.choices[0].finish_reason
             }
