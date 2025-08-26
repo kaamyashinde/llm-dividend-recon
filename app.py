@@ -14,6 +14,7 @@ sys.path.append(os.path.dirname(__file__))
 # Import our custom agents and utils
 try:
     from agents.mappings_agent import MappingsAgent
+    from agents.breaks_streamlit_integration import display_breaks_results
     from utils import logger
     AGENT_AVAILABLE = True
 except ImportError as e:
@@ -244,6 +245,8 @@ def display_mapping_results(mappings_data: dict):
                 st.session_state.custom_mappings = []
                 st.session_state.rejected_overrides = {}
                 st.session_state.mapping_result = None
+                st.session_state.mappings_applied = False
+                st.session_state.effective_mappings = None
                 st.rerun()
         
         with col2:
@@ -252,7 +255,28 @@ def display_mapping_results(mappings_data: dict):
         
         with col3:
             if st.button("✅ Apply All Mappings", type="primary", use_container_width=True):
-                st.success(f"Applied {total_mappings} mappings ({accepted_count} AI + {custom_count} custom)! 🎉")
+                # Build effective mappings only from accepted rows and custom mappings
+                effective_mappings = {}
+                try:
+                    for i, row in edited_df.iterrows():
+                        if row.get('Accepted'):
+                            src = row.get('NBIM')
+                            tgt = row.get('Custodian')
+                            if src and tgt:
+                                effective_mappings[src] = tgt
+                    for cm in st.session_state.custom_mappings:
+                        src = cm.get('source_header')
+                        tgt = cm.get('target_header')
+                        if src and tgt:
+                            effective_mappings[src] = tgt
+                    st.session_state.effective_mappings = effective_mappings if effective_mappings else None
+                    st.session_state.mappings_applied = bool(effective_mappings)
+                    if st.session_state.mappings_applied:
+                        st.success(f"Applied {len(effective_mappings)} mappings! 🎉")
+                    else:
+                        st.warning("No accepted mappings to apply. Please accept or add custom mappings.")
+                except Exception as e:
+                    st.error(f"Failed to apply mappings: {e}")
     
     # Show unmapped headers with ability to add custom mappings
     unmapped = mappings_data.get('unmapped_headers', [])
@@ -604,6 +628,68 @@ if nbim_file is not None:
         
         # Add AI-powered header mapping section
         add_header_mapping_section(nbim_df, custody_df)
+        
+        # Build mappings for break identification
+        mappings = None
+        if hasattr(st.session_state, 'mapping_result') and st.session_state.mapping_result:
+            mapping_data = st.session_state.mapping_result
+            mappings = {}
+            ai_mappings = mapping_data.get('mappings', []) or []
+
+            # Use accepted mappings if user decisions exist, else fall back to AI suggestions
+            user_decisions = getattr(st.session_state, 'user_decisions', {}) or {}
+            if isinstance(user_decisions, dict) and user_decisions:
+                for i, m in enumerate(ai_mappings):
+                    if user_decisions.get(i, False):
+                        mappings[m['source_header']] = m['target_header']
+            else:
+                # No explicit accept/reject yet; use AI suggestions to enable analysis
+                for m in ai_mappings:
+                    mappings[m['source_header']] = m['target_header']
+
+            # Overlay user custom mappings if any
+            custom_mappings = getattr(st.session_state, 'custom_mappings', []) or []
+            for cm in custom_mappings:
+                src = cm.get('source_header')
+                tgt = cm.get('target_header')
+                if src and tgt:
+                    mappings[src] = tgt
+            # Ensure None if we ended up with empty dict
+            if not mappings:
+                mappings = None
+        
+        # Only run reconciliation when user applies mappings
+        if AGENT_AVAILABLE and getattr(st.session_state, 'mappings_applied', False):
+            effective_mappings = getattr(st.session_state, 'effective_mappings', None)
+            if effective_mappings:
+                try:
+                    from agents.breaks_identifier_agent import BreaksIdentifierAgent
+                    agent = BreaksIdentifierAgent()
+                    # Restrict payload to only mapped columns to avoid spurious comparisons
+                    nbim_cols = list(effective_mappings.keys())
+                    custody_cols = list(effective_mappings.values())
+                    nbim_slim = nbim_df[ [c for c in nbim_cols if c in nbim_df.columns] ].copy()
+                    custody_slim = custody_df[ [c for c in custody_cols if c in custody_df.columns] ].copy()
+                    with st.spinner("🤖 AI is identifying breaks using the applied mappings..."):
+                        result = asyncio.run(agent.identify_breaks(
+                            nbim_data=nbim_slim.to_dict('records'),
+                            custody_data=custody_slim.to_dict('records'),
+                            mappings=effective_mappings,
+                            additional_context=None,
+                            timeout=180.0
+                        ))
+                    if agent.validate_breaks(result):
+                        st.success("✅ Breaks analysis completed!")
+                        display_breaks_results(result.response.structured_data)
+                    else:
+                        err = result.error if result and result.error else 'Validation failed'
+                        st.error(f"❌ Breaks analysis failed: {err}")
+                except Exception as e:
+                    st.error(f"🚨 Error running breaks identification: {e}")
+            else:
+                st.info("Apply mappings to run reconciliation analysis.")
+        else:
+            st.info("Apply mappings to run reconciliation analysis.")
         
         # Display tables side by side
         st.markdown("## Data Preview")
