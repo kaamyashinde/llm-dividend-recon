@@ -43,84 +43,25 @@ class FixType(str, Enum):
     REFERENCE_DATA_UPDATE = "reference_data_update"
 
 
-class ResolutionStep(BaseModel):
-    """A single step in the resolution process."""
-    step_number: int = Field(description="Order of execution for this step")
-    action: str = Field(description="Specific action to take")
-    target_system: str = Field(description="System where action should be applied (NBIM/Custody/Both)")
-    details: str = Field(description="Detailed instructions for this step")
-    automated_possible: bool = Field(description="Whether this step can be automated")
+
 
 
 class BreakResolution(BaseModel):
-    """Resolution details for a single break."""
+    """Simplified resolution details for a single break."""
     break_id: str = Field(description="ID of the break being resolved")
-    composite_key: str = Field(description="Composite key of the affected record")
-    
-    # Root cause analysis
-    root_cause: str = Field(description="Identified root cause of the break")
-    root_cause_category: str = Field(description="Category of root cause")
-    root_cause_confidence: float = Field(ge=0, le=1, description="Confidence in root cause identification")
-    
-    # Supporting evidence
-    evidence: List[str] = Field(description="Evidence supporting the root cause analysis")
-    patterns_detected: List[str] = Field(default=[], description="Patterns that helped identify the cause")
-    
-    # Suggested fix
-    fix_type: str = Field(description="Type of fix recommended")
-    fix_description: str = Field(description="Detailed description of the suggested fix")
-    fix_complexity: str = Field(description="Complexity level (Simple/Medium/Complex)")
-    
-    # Resolution steps
-    resolution_steps: List[ResolutionStep] = Field(description="Step-by-step resolution process")
-    
-    # Expected outcome
-    expected_result: str = Field(description="Expected result after applying the fix")
-    success_criteria: List[str] = Field(description="Criteria to verify successful resolution")
-    
-    # Risk assessment
-    risk_level: str = Field(description="Risk level of applying this fix (Low/Medium/High)")
-    risk_factors: List[str] = Field(default=[], description="Potential risks if fix is applied")
-    
-    # Automation potential
-    can_be_automated: bool = Field(description="Whether this fix can be fully automated")
-    automation_confidence: float = Field(ge=0, le=1, description="Confidence in automation")
-    manual_validation_required: bool = Field(description="Whether manual validation is needed")
-    
-    # Alternative solutions
-    alternative_fixes: List[str] = Field(default=[], description="Alternative ways to fix this break")
-    
-    # Priority and urgency
-    priority: str = Field(description="Priority level for this fix (Critical/High/Medium/Low)")
-    estimated_time_to_fix: str = Field(description="Estimated time to implement the fix")
+    corrected_value: str = Field(description="The exact corrected value or 'Manual review required'")
+    reasoning: str = Field(description="Brief explanation of why this is the correct value")
+    confidence: float = Field(ge=0, le=1, description="Confidence in the suggested value")
 
 
 class BreaksResolutionResponse(BaseAgentResponse):
-    """Response from the breaks resolution agent."""
+    """Simplified response from the breaks resolution agent."""
     resolutions: List[BreakResolution] = Field(description="List of break resolutions")
     
     # Summary statistics
     total_breaks_analyzed: int = Field(description="Total number of breaks analyzed")
-    total_resolvable: int = Field(description="Number of breaks that can be resolved")
+    total_resolvable: int = Field(description="Number of breaks with suggested values")
     total_requiring_manual_review: int = Field(description="Number requiring manual review")
-    
-    # Root cause summary
-    root_cause_summary: Dict[str, int] = Field(description="Count of breaks by root cause category")
-    fix_type_summary: Dict[str, int] = Field(description="Count of breaks by fix type")
-    
-    # Automation potential
-    automation_potential: Dict[str, Any] = Field(description="Summary of automation possibilities")
-    
-    # Overall recommendations
-    overall_recommendations: List[str] = Field(description="High-level recommendations")
-    systemic_issues_identified: List[str] = Field(description="Systemic issues found across breaks")
-    
-    # Process improvements
-    process_improvements: List[str] = Field(description="Suggested process improvements")
-    
-    # Metadata
-    analysis_timestamp: str = Field(description="When the analysis was performed")
-    confidence_score: float = Field(ge=0, le=1, description="Overall confidence in resolutions")
 
 
 class BreaksResolutionAgent:
@@ -134,54 +75,26 @@ class BreaksResolutionAgent:
     
     def _build_system_prompt(self) -> str:
         """Build system prompt for resolution analysis."""
-        return """You are an expert financial operations analyst specializing in break resolution and reconciliation fixes.
+        return """You are an expert financial reconciliation analyst. Your job is to provide EXACT CORRECTED VALUES for reconciliation breaks.
 
-Your task is to analyze reconciliation breaks and provide detailed resolution strategies.
+RULES:
+1. For VALUE MISMATCHES: Calculate the exact correct number
+2. For MISSING RECORDS: State "Manual review required"  
+3. For TAX ISSUES: Use standard rates (US=15%, UK=20%, etc.) and calculate exact amounts
+4. For QUANTITY ISSUES: Provide exact share count
+5. For DATE ISSUES: Provide exact date in YYYY-MM-DD format
+6. WHEN IN DOUBT: Assume the Custodian value is correct (Custodian systems are typically more reliable for settlement data)
 
-For each break, you must:
+EXAMPLES:
+- Tax break: "450.00" (reasoning: "15% withholding tax on $3000 gross = $450")
+- Quantity break: "2500" (reasoning: "Post 2:1 stock split, original 1250 shares becomes 2500")
+- Missing record: "Manual review required" (reasoning: "Need to verify if dividend payment actually occurred")
+- FX break: "1250.75" (reasoning: "USD amount $1000 * EUR/USD rate 1.25075")
+- Uncertain case: "125.50" (reasoning: "Using Custodian value as it's more reliable for settlement data")
 
-1. ROOT CAUSE ANALYSIS:
-   - Identify the most likely root cause based on the break details
-   - Categorize the root cause (e.g., timing difference, data entry error, system sync issue, calculation error)
-   - Provide evidence supporting your conclusion
-   - Identify any patterns that indicate systemic issues
+Always provide NUMBERS, DATES, or "Manual review required" - never vague descriptions.
 
-2. RESOLUTION STRATEGY:
-   - Propose a specific, actionable fix
-   - Break down the fix into clear, sequential steps
-   - Identify which system needs updating (NBIM, Custody, or both)
-   - Assess if the fix can be automated
-
-3. RISK ASSESSMENT:
-   - Evaluate the risk of applying the fix
-   - Identify potential side effects
-   - Suggest validation steps
-
-4. COMMON ROOT CAUSES TO CONSIDER:
-   - Timing differences (T+1, T+2 settlement)
-   - Tax rate discrepancies (withholding tax rates)
-   - FX rate differences (spot vs forward rates)
-   - Corporate action processing delays
-   - Manual data entry errors
-   - System synchronization issues
-   - Calculation methodology differences
-   - Rounding differences
-   - Missing reference data
-   - Duplicate entries
-   - Partial settlements
-   - Fee calculations
-
-5. FIX CATEGORIES:
-   - Data corrections (update incorrect values)
-   - Recalculations (recompute using correct formula)
-   - Date alignments (adjust for timing differences)
-   - Reference data updates (update static data)
-   - System synchronization (align data between systems)
-   - Manual review required (complex cases)
-
-Be specific and practical in your recommendations. Focus on fixes that can actually be implemented.
-
-Return structured JSON following the BreaksResolutionResponse schema."""
+Return JSON with corrected_value and reasoning for each break."""
     
     def _build_resolution_prompt(
         self,
@@ -191,7 +104,7 @@ Return structured JSON following the BreaksResolutionResponse schema."""
     ) -> str:
         """Build the prompt for resolution analysis."""
         
-        prompt = f"""Please analyze these reconciliation breaks and provide detailed resolution strategies:
+        prompt = f"""Please analyze these reconciliation breaks and provide ACTUAL CORRECTED VALUES for each break:
 
 BREAKS TO ANALYZE ({len(breaks)} total):
 ```json
@@ -218,118 +131,34 @@ HISTORICAL PATTERNS (from previous reconciliations):
 
         prompt += """
 
-For each break, provide a comprehensive resolution strategy including:
-1. Root cause identification with evidence
-2. Specific fix with step-by-step instructions
-3. Risk assessment and automation potential
-4. Alternative solutions if applicable
+For each break, provide:
+1. The EXACT corrected value (number, text, or "Manual review required")
+2. Brief reasoning explaining why this is the correct value
 
-Focus on practical, implementable solutions. Consider:
-- Whether the fix can be automated
-- The impact on downstream processes
-- Validation steps needed
-- Time and effort required
-
-Return your analysis as JSON matching this structure:
+Return JSON in this simple format:
 
 {
   "success": true,
   "resolutions": [
     {
       "break_id": "BRK_001",
-      "composite_key": "EVT001|US123|SEDOL123|ACC001",
-      "root_cause": "Withholding tax rate mismatch - NBIM using 15% while Custody using 10%",
-      "root_cause_category": "Tax Rate Discrepancy",
-      "root_cause_confidence": 0.95,
-      "evidence": [
-        "NBIM tax amount is exactly 15% of gross",
-        "Custody tax amount is exactly 10% of gross",
-        "This security is US-listed with standard 15% treaty rate"
-      ],
-      "patterns_detected": ["Consistent 5% difference across all US securities"],
-      "fix_type": "tax_rate_update",
-      "fix_description": "Update Custody system to apply correct 15% US withholding tax rate",
-      "fix_complexity": "Simple",
-      "resolution_steps": [
-        {
-          "step_number": 1,
-          "action": "Update tax rate",
-          "target_system": "Custody",
-          "details": "Change withholding tax rate from 10% to 15% for US securities",
-          "automated_possible": true
-        },
-        {
-          "step_number": 2,
-          "action": "Recalculate tax amount",
-          "target_system": "Custody",
-          "details": "Recalculate: tax = gross_amount * 0.15",
-          "automated_possible": true
-        },
-        {
-          "step_number": 3,
-          "action": "Update net amount",
-          "target_system": "Custody",
-          "details": "Recalculate: net = gross_amount - tax",
-          "automated_possible": true
-        }
-      ],
-      "expected_result": "Tax and net amounts will match between systems",
-      "success_criteria": [
-        "Custody tax amount equals NBIM tax amount",
-        "Custody net amount equals NBIM net amount"
-      ],
-      "risk_level": "Low",
-      "risk_factors": ["May affect other US securities if applied broadly"],
-      "can_be_automated": true,
-      "automation_confidence": 0.9,
-      "manual_validation_required": false,
-      "alternative_fixes": [
-        "Manual adjustment of this specific record",
-        "Investigate if NBIM rate is incorrect instead"
-      ],
-      "priority": "High",
-      "estimated_time_to_fix": "5 minutes"
+      "corrected_value": "360.00",
+      "reasoning": "US securities have 15% withholding tax rate, so correct tax = gross_amount * 0.15 = 2400 * 0.15 = 360.00",
+      "confidence": 0.95
+    },
+    {
+      "break_id": "BRK_002", 
+      "corrected_value": "Manual review required",
+      "reasoning": "Missing record requires investigation of source systems to determine if dividend was actually paid",
+      "confidence": 0.0
     }
   ],
-  "total_breaks_analyzed": 10,
-  "total_resolvable": 8,
-  "total_requiring_manual_review": 2,
-  "root_cause_summary": {
-    "Tax Rate Discrepancy": 4,
-    "Timing Difference": 3,
-    "Data Entry Error": 2,
-    "Missing Record": 1
-  },
-  "fix_type_summary": {
-    "tax_rate_update": 4,
-    "date_alignment": 3,
-    "data_correction": 2,
-    "manual_review_required": 1
-  },
-  "automation_potential": {
-    "fully_automatable": 6,
-    "partially_automatable": 2,
-    "manual_only": 2,
-    "automation_percentage": 60
-  },
-  "overall_recommendations": [
-    "Implement automated tax rate validation",
-    "Standardize date formats between systems",
-    "Add reconciliation checkpoints"
-  ],
-  "systemic_issues_identified": [
-    "Consistent tax rate mismatch for US securities",
-    "Date format inconsistencies"
-  ],
-  "process_improvements": [
-    "Add pre-reconciliation data validation",
-    "Implement real-time sync between systems"
-  ],
-  "analysis_timestamp": "2024-01-15T10:30:00Z",
-  "confidence_score": 0.85
+  "total_breaks_analyzed": 2,
+  "total_resolvable": 1,
+  "total_requiring_manual_review": 1
 }
 
-Be thorough in your analysis and provide actionable, specific fixes."""
+Focus on providing exact corrected values with clear, brief reasoning."""
         
         return prompt
     
@@ -384,87 +213,74 @@ Be thorough in your analysis and provide actionable, specific fixes."""
         
         return result
     
-    def get_automatable_fixes(self, result: AgentResult) -> List[Dict[str, Any]]:
-        """Get all fixes that can be automated."""
+    def get_fixes_with_values(self, result: AgentResult) -> List[Dict[str, Any]]:
+        """Get all fixes that have suggested values (not manual review)."""
         
         if not result.response or not result.response.structured_data:
             return []
         
         resolutions = result.response.structured_data.get("resolutions", [])
-        return [r for r in resolutions if r.get("can_be_automated", False)]
+        return [r for r in resolutions if r.get("corrected_value", "") != "Manual review required"]
     
-    def get_fixes_by_priority(self, result: AgentResult, priority: str) -> List[Dict[str, Any]]:
-        """Get all fixes of a specific priority."""
+    def get_manual_review_fixes(self, result: AgentResult) -> List[Dict[str, Any]]:
+        """Get all fixes that require manual review."""
         
         if not result.response or not result.response.structured_data:
             return []
         
         resolutions = result.response.structured_data.get("resolutions", [])
-        return [r for r in resolutions if r.get("priority", "").lower() == priority.lower()]
+        return [r for r in resolutions if r.get("corrected_value", "") == "Manual review required"]
     
-    def get_fixes_by_type(self, result: AgentResult, fix_type: str) -> List[Dict[str, Any]]:
-        """Get all fixes of a specific type."""
+    def get_high_confidence_fixes(self, result: AgentResult, min_confidence: float = 0.8) -> List[Dict[str, Any]]:
+        """Get fixes with high confidence scores."""
         
         if not result.response or not result.response.structured_data:
             return []
         
         resolutions = result.response.structured_data.get("resolutions", [])
-        return [r for r in resolutions if r.get("fix_type") == fix_type]
-    
-    def get_systemic_issues(self, result: AgentResult) -> List[str]:
-        """Extract systemic issues identified across multiple breaks."""
-        
-        if not result.response or not result.response.structured_data:
-            return []
-        
-        return result.response.structured_data.get("systemic_issues_identified", [])
+        return [r for r in resolutions if r.get("confidence", 0) >= min_confidence]
     
     def generate_fix_script(self, resolution: Dict[str, Any]) -> str:
         """
-        Generate a Python script to apply the fix (if automatable).
+        Generate a Python script to apply the fix.
         
         Args:
             resolution: Single resolution from the agent
             
         Returns:
-            Python script as string, or empty string if not automatable
+            Python script as string
         """
         
-        if not resolution.get("can_be_automated", False):
+        corrected_value = resolution.get("corrected_value", "Manual review required")
+        if corrected_value == "Manual review required":
             return ""
         
         script = f'''"""
 Auto-generated fix script for Break: {resolution.get("break_id", "Unknown")}
-Composite Key: {resolution.get("composite_key", "Unknown")}
-Fix Type: {resolution.get("fix_type", "Unknown")}
-Generated at: {resolution.get("analysis_timestamp", "Unknown")}
+Corrected Value: {corrected_value}
+Reasoning: {resolution.get("reasoning", "No reasoning provided")}
 """
 
-def apply_fix(nbim_data, custody_data, composite_key):
-    """Apply the automated fix for this break."""
+def apply_fix(data, break_id, field_name):
+    """Apply the fix by updating the incorrect value."""
     
-    # Fix: {resolution.get("fix_description", "No description")}
+    corrected_value = "{corrected_value}"
     
-'''
-        
-        # Add steps from resolution
-        for step in resolution.get("resolution_steps", []):
-            if step.get("automated_possible", False):
-                script += f'''
-    # Step {step.get("step_number")}: {step.get("action")}
-    # Target: {step.get("target_system")}
-    # Details: {step.get("details")}
-    # TODO: Implement this step
+    # Find the record with this break_id and update the field
+    for record in data:
+        if record.get("break_id") == break_id:
+            # Update the field with the corrected value
+            record[field_name] = corrected_value
+            print(f"Updated {{field_name}} to {{corrected_value}} for break {{break_id}}")
+            return True
     
-'''
-        
-        script += '''
-    return True  # Return success status
+    print(f"Could not find record for break {{break_id}}")
+    return False
 
 if __name__ == "__main__":
     # Example usage
-    success = apply_fix(nbim_data, custody_data, composite_key)
-    print(f"Fix applied: {success}")
+    success = apply_fix(data, "{resolution.get("break_id", "Unknown")}", "field_name")
+    print(f"Fix applied: {{success}}")
 '''
         
         return script

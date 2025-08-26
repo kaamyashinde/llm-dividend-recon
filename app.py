@@ -15,6 +15,7 @@ sys.path.append(os.path.dirname(__file__))
 try:
     from agents.mappings_agent import MappingsAgent
     from agents.breaks_streamlit_integration import display_breaks_results
+    from agents.breaks_resolution_agent import BreaksResolutionAgent
     from utils import logger
     AGENT_AVAILABLE = True
 except ImportError as e:
@@ -247,6 +248,13 @@ def display_mapping_results(mappings_data: dict):
                 st.session_state.mapping_result = None
                 st.session_state.mappings_applied = False
                 st.session_state.effective_mappings = None
+                # Clear breaks and resolution results
+                if "breaks_result" in st.session_state:
+                    st.session_state.breaks_result = None
+                if "resolution_result" in st.session_state:
+                    st.session_state.resolution_result = None
+                if "fix_decisions" in st.session_state:
+                    st.session_state.fix_decisions = {}
                 st.rerun()
         
         with col2:
@@ -606,7 +614,7 @@ def export_accepted_mappings_as_csv(mappings_data: dict):
 
 
 st.set_page_config(layout="wide")
-st.title("LLM Dividend Reconcilation Application")
+st.title("LLM Dividend Reconciliation & Resolution Application")
 
 # File upload system
 st.markdown("## Upload Files")
@@ -680,6 +688,9 @@ if nbim_file is not None:
                         ))
                     if agent.validate_breaks(result):
                         st.success("✅ Breaks analysis completed!")
+                        # Ensure resolution_result session state is initialized
+                        if "resolution_result" not in st.session_state:
+                            st.session_state.resolution_result = None
                         display_breaks_results(result.response.structured_data)
                     else:
                         err = result.error if result and result.error else 'Validation failed'

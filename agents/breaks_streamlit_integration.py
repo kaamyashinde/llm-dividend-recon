@@ -11,8 +11,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import json
 
-# Import the breaks identifier agent
+# Import the breaks identifier and resolution agents
 from agents.breaks_identifier_agent import BreaksIdentifierAgent
+from agents.breaks_resolution_agent import BreaksResolutionAgent
 from utils import logger
 
 
@@ -35,6 +36,9 @@ def add_breaks_identification_section(nbim_df: pd.DataFrame, custody_df: pd.Data
     
     if "breaks_filter" not in st.session_state:
         st.session_state.breaks_filter = "all"
+        
+    if "resolution_result" not in st.session_state:
+        st.session_state.resolution_result = None
     
     # Analysis options
     col1, col2, col3 = st.columns(3)
@@ -159,17 +163,79 @@ def run_breaks_analysis(
         logger.error(f"Breaks analysis error: {e}")
 
 
+def run_breaks_resolution(breaks_data: Dict[str, Any]):
+    """Run the breaks resolution analysis."""
+    
+    breaks = breaks_data.get("breaks", [])
+    if not breaks:
+        st.warning("No breaks to analyze for resolution.")
+        return
+    
+    try:
+        # Create resolution agent
+        resolution_agent = BreaksResolutionAgent()
+        
+        with st.spinner(f"🤖 AI is analyzing {len(breaks)} breaks for resolution strategies..."):
+            # Build additional context
+            additional_context = f"""
+            This is a dividend reconciliation analysis.
+            We have identified {len(breaks)} breaks between NBIM and Custody systems.
+            
+            Break classifications found: {', '.join(breaks_data.get('classification_summary', {}).keys())}
+            Severity levels: {', '.join(breaks_data.get('severity_summary', {}).keys())}
+            
+            Please focus on practical, actionable fixes that can be implemented.
+            Consider automation opportunities where possible.
+            """
+            
+            result = asyncio.run(resolution_agent.analyze_and_resolve(
+                breaks=breaks,
+                additional_context=additional_context.strip(),
+                historical_patterns=None,  # Could be passed from previous reconciliations
+                timeout=90.0  # Reduced timeout for simpler analysis
+            ))
+        
+        # Validate and store results
+        if resolution_agent.validate_resolution(result):
+            st.session_state.resolution_result = result.response.structured_data
+            st.success("✅ Breaks resolution analysis completed successfully!")
+            
+            # Show quick summary
+            total_resolutions = result.response.structured_data.get("total_breaks_analyzed", 0)
+            automatable_count = result.response.structured_data.get("automation_potential", {}).get("fully_automatable", 0)
+            st.info(f"📋 Analyzed {total_resolutions} breaks. {automatable_count} can be fully automated.")
+        else:
+            error_msg = str(result.error) if result.error else "Resolution analysis validation failed"
+            st.error(f"❌ Resolution analysis failed: {error_msg}")
+    
+    except Exception as e:
+        st.error(f"🚨 Error running breaks resolution: {str(e)}")
+        logger.error(f"Breaks resolution error: {e}")
+
+
 def display_breaks_results(breaks_data: Dict[str, Any]):
-    """Display the breaks analysis results with a summary and a clear breakdown."""
+    """Display the breaks analysis results with a summary and resolution table."""
     
-    # Keep the summary as a dedicated tab
-    tab1, = st.tabs(["📊 Summary"])
-    with tab1:
-        display_summary_tab(breaks_data)
+    # Initialize resolution result session state if not exists
+    if "resolution_result" not in st.session_state:
+        st.session_state.resolution_result = None
     
-    # Show a clearer breakdown below
+    # Initialize fix decisions session state
+    if "fix_decisions" not in st.session_state:
+        st.session_state.fix_decisions = {}
+    
+    # Display summary tab
+    display_summary_tab(breaks_data)
+    
+    # Show detailed breakdown table
     st.markdown("---")
     display_breakdown_section(breaks_data)
+    
+    # Show resolution section if we have breaks
+    total_breaks = breaks_data.get("total_breaks_found", 0)
+    if total_breaks > 0:
+        st.markdown("---")
+        display_resolution_section(breaks_data)
 
 
 def display_summary_tab(breaks_data: Dict[str, Any]):
@@ -325,6 +391,216 @@ def display_breakdown_section(breaks_data: Dict[str, Any]):
                 st.caption(f"Difference: {b.get('difference')}")
             if b.get('impact_assessment'):
                 st.info(b.get('impact_assessment'))
+
+
+def display_resolution_section(breaks_data: Dict[str, Any]):
+    """Display the resolution section with fix suggestions as a table."""
+    
+    st.markdown("### 🔧 Suggested Fixes")
+    st.markdown("AI-powered suggestions for fixing the identified breaks.")
+    
+    # Resolution analysis button
+    if st.session_state.resolution_result is None:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🚀 Generate Fix Suggestions", type="primary", use_container_width=True):
+                run_breaks_resolution(breaks_data)
+                return
+    else:
+        # Show re-run option and summary
+        col1, col2, col3 = st.columns([2, 1, 2])
+        with col1:
+            resolution_data = st.session_state.resolution_result
+            total_analyzed = resolution_data.get("total_breaks_analyzed", 0)
+            total_resolvable = resolution_data.get("total_resolvable", 0)
+            manual_review = resolution_data.get("total_requiring_manual_review", 0)
+            st.info(f"📋 {total_analyzed} breaks analyzed • {total_resolvable} have suggested values • {manual_review} need manual review")
+        with col2:
+            if st.button("🔄 Re-analyze", use_container_width=True):
+                st.session_state.resolution_result = None
+                st.session_state.fix_decisions = {}
+                st.rerun()
+        with col3:
+            # Action buttons for accepted/rejected fixes
+            display_fix_action_buttons()
+    
+    # Display resolution table if available
+    if st.session_state.resolution_result:
+        display_resolution_table(breaks_data, st.session_state.resolution_result)
+    else:
+        st.info("Click 'Generate Fix Suggestions' to get AI-powered recommendations for fixing these breaks.")
+
+
+def display_resolution_table(breaks_data: Dict[str, Any], resolution_data: Dict[str, Any]):
+    """Display resolution suggestions in a table format with accept/reject functionality."""
+    
+    breaks = breaks_data.get("breaks", [])
+    resolutions = resolution_data.get("resolutions", [])
+    
+    if not resolutions:
+        st.warning("No fix suggestions available.")
+        return
+    
+    # Create a mapping of break_id to break data for easy lookup
+    break_lookup = {b.get("break_id"): b for b in breaks}
+    
+    # Prepare table data
+    table_data = []
+    for resolution in resolutions:
+        break_id = resolution.get("break_id")
+        break_info = break_lookup.get(break_id, {})
+        
+        # Get suggested fix value and reasoning
+        suggested_value = extract_suggested_value(resolution)
+        reasoning = resolution.get("reasoning", "No reasoning provided")
+        confidence = resolution.get("confidence", 0)
+        
+        # Get current decision or default to None
+        current_decision = st.session_state.fix_decisions.get(break_id, None)
+        
+        table_data.append({
+            "Break ID": break_id,
+            "Classification": break_info.get("classification", "Unknown"),
+            "Severity": (break_info.get("severity", "").title() or "Unknown"),
+            "Field": break_info.get("affected_field", "Unknown"),
+            "Current Value": format_value(break_info.get("nbim_value")),
+            "Custody Value": format_value(break_info.get("custody_value")),
+            "Suggested Fix Value": suggested_value,
+            "Reasoning": reasoning,
+            "Confidence": f"{confidence:.0%}" if confidence > 0 else "Manual Review",
+            "Accept": current_decision if current_decision is not None else False
+        })
+    
+    if not table_data:
+        st.warning("No resolution data to display.")
+        return
+    
+    # Create DataFrame
+    df = pd.DataFrame(table_data)
+    
+    # Configure columns for data editor
+    column_config = {
+        "Break ID": st.column_config.TextColumn("Break ID", disabled=True),
+        "Classification": st.column_config.TextColumn("Classification", disabled=True),
+        "Severity": st.column_config.TextColumn("Severity", disabled=True),
+        "Field": st.column_config.TextColumn("Field", disabled=True),
+        "Current Value": st.column_config.TextColumn("Current Value", disabled=True),
+        "Custody Value": st.column_config.TextColumn("Custody Value", disabled=True),
+        "Suggested Fix Value": st.column_config.TextColumn("Suggested Fix Value", disabled=True, help="AI-suggested corrected value"),
+        "Reasoning": st.column_config.TextColumn("Reasoning", disabled=True, help="AI's reasoning for the suggested value"),
+        "Confidence": st.column_config.TextColumn("Confidence", disabled=True, help="AI's confidence in the suggestion"),
+        "Accept": st.column_config.CheckboxColumn(
+            "Accept Fix",
+            help="Check to accept this fix suggestion",
+            default=False,
+        )
+    }
+    
+    # Display the editable table
+    edited_df = st.data_editor(
+        df,
+        column_config=column_config,
+        disabled=["Break ID", "Classification", "Severity", "Field", "Current Value", "Custody Value", "Suggested Fix Value", "Reasoning", "Confidence"],
+        hide_index=True,
+        use_container_width=True,
+        key="resolution_table"
+    )
+    
+    # Update session state based on user decisions
+    update_fix_decisions(edited_df)
+    
+    # Show summary of decisions
+    display_fix_summary()
+
+
+def extract_suggested_value(resolution: Dict[str, Any]) -> str:
+    """Extract suggested fix value from resolution data."""
+    
+    # The new format directly provides the corrected value
+    corrected_value = resolution.get("corrected_value")
+    
+    if corrected_value:
+        return str(corrected_value)
+    
+    # Fallback for any legacy format
+    return "Manual review needed"
+
+
+def format_value(value) -> str:
+    """Format values for display in the table."""
+    if value is None:
+        return "N/A"
+    if isinstance(value, (int, float)):
+        return f"{value:,.2f}" if value != int(value) else f"{int(value):,}"
+    return str(value)
+
+
+def update_fix_decisions(edited_df: pd.DataFrame):
+    """Update session state with user's fix decisions."""
+    
+    for _, row in edited_df.iterrows():
+        break_id = row["Break ID"]
+        accepted = row["Accept"]
+        
+        # Update decision if it changed
+        current_decision = st.session_state.fix_decisions.get(break_id)
+        if current_decision != accepted:
+            st.session_state.fix_decisions[break_id] = accepted
+
+
+def display_fix_summary():
+    """Display summary of fix decisions."""
+    
+    if not st.session_state.fix_decisions:
+        return
+    
+    accepted_count = sum(1 for decision in st.session_state.fix_decisions.values() if decision)
+    rejected_count = sum(1 for decision in st.session_state.fix_decisions.values() if not decision)
+    
+    if accepted_count > 0 or rejected_count > 0:
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if accepted_count > 0:
+                st.success(f"✅ {accepted_count} fixes accepted")
+        
+        with col2:
+            if rejected_count > 0:
+                st.warning(f"❌ {rejected_count} fixes rejected")
+        
+        with col3:
+            if rejected_count > 0:
+                st.info(f"🎫 {rejected_count} items will need Jira tickets")
+
+
+def display_fix_action_buttons():
+    """Display action buttons for managing fixes."""
+    
+    if not st.session_state.fix_decisions:
+        return
+    
+    accepted_fixes = [k for k, v in st.session_state.fix_decisions.items() if v]
+    rejected_fixes = [k for k, v in st.session_state.fix_decisions.items() if not v]
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if accepted_fixes:
+            if st.button(f"🚀 Apply {len(accepted_fixes)} Fixes", type="primary", use_container_width=True):
+                st.success(f"✅ {len(accepted_fixes)} fixes would be applied!")
+                st.info("Fix application logic will be implemented here.")
+    
+    with col2:
+        if rejected_fixes:
+            if st.button(f"🎫 Create Jira Tickets ({len(rejected_fixes)})", use_container_width=True):
+                st.info(f"🎫 {len(rejected_fixes)} Jira tickets would be created for manual review.")
+                st.info("Jira agent integration will be implemented here.")
+
+
+
+
+
+
 
 
 def display_breaks_details_tab(breaks_data: Dict[str, Any]):
