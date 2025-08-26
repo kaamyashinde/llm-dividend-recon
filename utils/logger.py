@@ -77,7 +77,7 @@ class AgentLogger:
         message = f"Error in {agent_name}: {str(error)}"
         if context:
             message += f" | Context: {context}"
-        self.error(message, exc_info=True)
+        self.logger.error(message, exc_info=True)
 
 
 # Global logger instance
