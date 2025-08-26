@@ -32,12 +32,14 @@ class HeaderMapping(BaseModel):
     target_header: str = Field(description="Mapped/standardized header name")
     confidence: float = Field(description="Confidence score (0-1)", ge=0, le=1)
     reasoning: str = Field(description="Explanation for the mapping")
+    is_primary_key: bool = Field(default=False, description="Whether this column is a primary key")
 
 
 class MappingsResponse(BaseAgentResponse):
     """Response structure for mappings agent."""
     mappings: List[HeaderMapping] = Field(description="List of header mappings")
     unmapped_headers: List[str] = Field(default=[], description="Headers that couldn't be mapped")
+    primary_keys: List[str] = Field(default=[], description="List of identified primary key columns")
     summary: str = Field(description="Summary of the mapping process")
     total_mappings: int = Field(description="Total number of successful mappings")
 
@@ -63,12 +65,23 @@ Your job is to:
 - Provide confidence scores for your mappings
 - Explain your reasoning for each mapping
 - Identify headers that cannot be mapped
+- IMPORTANT: Identify primary key columns
+
+PRIMARY KEY IDENTIFICATION:
+The following columns should ALWAYS be identified as primary keys when found:
+- coac_event_key (or variations like COAC_EVENT_KEY, CoAcEventKey, etc.)
+- isin (or variations like ISIN, Isin, ISIN_Code, etc.)
+- sedol (or variations like SEDOL, Sedol, SEDOL_Code, etc.)  
+- bank account (or variations like bank_account, BankAccount, Bank_Account, Account_Number, etc.)
+
+These columns represent unique identifiers and should be marked with is_primary_key: true in the mapping.
 
 Guidelines:
 - Look for semantic similarity, not just exact matches
 - Consider common abbreviations and variations (e.g., "Qty" = "Quantity")
 - Financial terms may have standard mappings (e.g., "ISIN" = "Security ID")
 - Be conservative with confidence scores - only high confidence (>0.8) for obvious matches
+- Always identify primary key columns (coac_event_key, isin, sedol, bank account)
 - Always return valid JSON in the specified format
 
 Return your response as JSON matching the MappingsResponse schema."""
@@ -97,7 +110,10 @@ CONTEXT:
 
         prompt += """
 
-Please analyze these headers and create mappings where appropriate. Return your response as JSON following this exact structure:
+Please analyze these headers and create mappings where appropriate. 
+IMPORTANT: Identify primary key columns (coac_event_key, isin, sedol, bank account or their variations).
+
+Return your response as JSON following this exact structure:
 
 {
   "success": true,
@@ -106,11 +122,13 @@ Please analyze these headers and create mappings where appropriate. Return your 
       "source_header": "original_header_name",
       "target_header": "mapped_header_name", 
       "confidence": 0.95,
-      "reasoning": "Explanation for this mapping"
+      "reasoning": "Explanation for this mapping",
+      "is_primary_key": false
     }
   ],
   "unmapped_headers": ["header1", "header2"],
-  "summary": "Brief summary of mapping process",
+  "primary_keys": ["isin", "sedol", "coac_event_key", "bank_account"],
+  "summary": "Brief summary of mapping process including identified primary keys",
   "total_mappings": 5
 }"""
 
@@ -188,6 +206,53 @@ Please analyze these headers and create mappings where appropriate. Return your 
             return False
             
         return True
+    
+    def get_primary_keys(self, result: AgentResult) -> List[str]:
+        """
+        Extract primary key columns from the mapping result.
+        
+        Args:
+            result: The agent result containing mappings
+            
+        Returns:
+            List of identified primary key column names
+        """
+        
+        if not self.validate_mappings(result):
+            return []
+        
+        primary_keys = []
+        mappings_data = result.response.structured_data
+        
+        # Get from primary_keys field
+        primary_keys.extend(mappings_data.get('primary_keys', []))
+        
+        # Also check individual mappings for is_primary_key flag
+        for mapping in mappings_data.get('mappings', []):
+            if mapping.get('is_primary_key', False):
+                # Add both source and target headers as primary keys
+                if mapping.get('source_header') and mapping['source_header'] not in primary_keys:
+                    primary_keys.append(mapping['source_header'])
+                if mapping.get('target_header') and mapping['target_header'] not in primary_keys:
+                    primary_keys.append(mapping['target_header'])
+        
+        # Ensure we always include the core primary keys if found in any form
+        core_keys = ['coac_event_key', 'isin', 'sedol', 'bank_account']
+        for key in core_keys:
+            # Check if any header contains the core key (case-insensitive)
+            for header in mappings_data.get('mappings', []):
+                source = header.get('source_header', '').lower()
+                target = header.get('target_header', '').lower()
+                key_lower = key.replace('_', '').replace(' ', '').lower()
+                
+                if key_lower in source.replace('_', '').replace(' ', '').lower():
+                    if header['source_header'] not in primary_keys:
+                        primary_keys.append(header['source_header'])
+                if key_lower in target.replace('_', '').replace(' ', '').lower():
+                    if header['target_header'] not in primary_keys:
+                        primary_keys.append(header['target_header'])
+        
+        return primary_keys
 
 
 # Example usage functions
@@ -196,8 +261,12 @@ async def example_usage():
     
     # Sample data (you would get this from your CSV files)
     nbim_headers = [
+        "coac_event_key",
         "Security_ID", 
         "Security_Name", 
+        "ISIN",
+        "SEDOL",
+        "Bank_Account",
         "Quantity", 
         "Unit_Price",
         "Market_Value_NOK",
@@ -205,8 +274,11 @@ async def example_usage():
     ]
     
     custody_headers = [
+        "COAC_EVENT_KEY",
         "ISIN",
-        "Instrument_Description", 
+        "Instrument_Description",
+        "SEDOL_Code", 
+        "Account_Number",
         "Qty",
         "Price_Per_Unit",
         "Market_Val_Local",
@@ -234,9 +306,16 @@ async def example_usage():
         print("✅ Mappings created successfully!")
         print(f"Total mappings: {mappings_data.get('total_mappings', 0)}")
         
+        # Print primary keys first
+        primary_keys = mappings_data.get('primary_keys', [])
+        if primary_keys:
+            print(f"\n🔑 Primary Keys Identified: {', '.join(primary_keys)}")
+        
         # Print each mapping
+        print("\n📊 Header Mappings:")
         for mapping in mappings_data.get('mappings', []):
-            print(f"  {mapping['source_header']} → {mapping['target_header']} "
+            pk_indicator = " 🔑" if mapping.get('is_primary_key', False) else ""
+            print(f"  {mapping['source_header']} → {mapping['target_header']}{pk_indicator} "
                   f"(confidence: {mapping['confidence']:.2f})")
             print(f"    Reasoning: {mapping['reasoning']}")
         
