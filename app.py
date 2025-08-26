@@ -215,7 +215,6 @@ def display_mapping_results(mappings_data: dict):
         with col3:
             if st.button("✅ Apply Mappings", type="primary", use_container_width=True):
                 st.success(f"Applied {accepted_count} mappings! 🎉")
-                st.balloons()
     
     # Show unmapped headers if any
     unmapped = mappings_data.get('unmapped_headers', [])
