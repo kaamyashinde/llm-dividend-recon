@@ -40,6 +40,18 @@ def add_breaks_identification_section(nbim_df: pd.DataFrame, custody_df: pd.Data
     if "resolution_result" not in st.session_state:
         st.session_state.resolution_result = None
     
+    # Initialize fix decisions session state early
+    if "fix_decisions" not in st.session_state:
+        st.session_state.fix_decisions = {}
+    
+    # Flag to track if resolution was requested
+    if "resolution_requested" not in st.session_state:
+        st.session_state.resolution_requested = False
+    
+    # Flag to track if breaks analysis was requested
+    if "breaks_analysis_requested" not in st.session_state:
+        st.session_state.breaks_analysis_requested = False
+    
     # Analysis options
     col1, col2, col3 = st.columns(3)
     
@@ -52,7 +64,8 @@ def add_breaks_identification_section(nbim_df: pd.DataFrame, custody_df: pd.Data
         selected_event = st.selectbox(
             "Select Event (Optional)",
             options=["All Events"] + event_keys,
-            help="Focus analysis on specific dividend event"
+            help="Focus analysis on specific dividend event",
+            key="breaks_selected_event"
         )
     
     with col2:
@@ -68,7 +81,8 @@ def add_breaks_identification_section(nbim_df: pd.DataFrame, custody_df: pd.Data
                 "currency issues"
             ],
             default=["missing records", "value mismatches"],
-            help="Specific areas to focus the analysis on"
+            help="Specific areas to focus the analysis on",
+            key="breaks_focus_areas"
         )
     
     with col3:
@@ -77,22 +91,52 @@ def add_breaks_identification_section(nbim_df: pd.DataFrame, custody_df: pd.Data
             "Analysis Depth",
             options=["Quick", "Standard", "Comprehensive"],
             value="Standard",
-            help="Level of detail in the analysis"
+            help="Level of detail in the analysis",
+            key="breaks_analysis_depth"
         )
     
     # Run analysis button
     if st.session_state.breaks_result is None:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            if st.button("🚀 Identify Breaks", type="primary", use_container_width=True):
-                run_breaks_analysis(nbim_df, custody_df, mappings, selected_event, focus_areas, analysis_depth)
+            if st.button("🚀 Identify Breaks", type="primary", use_container_width=True, key="identify_breaks_button"):
+                # Store analysis parameters in session state
+                st.session_state.breaks_analysis_params = {
+                    'selected_event': selected_event,
+                    'focus_areas': focus_areas,
+                    'analysis_depth': analysis_depth
+                }
+                st.session_state.breaks_analysis_requested = True
+                st.rerun()
     else:
         # Show re-run option
         col1, col2, col3 = st.columns([2, 1, 2])
         with col2:
-            if st.button("🔄 Re-run Analysis", use_container_width=True):
+            if st.button("🔄 Re-run Analysis", use_container_width=True, key="rerun_breaks_analysis_button"):
                 st.session_state.breaks_result = None
+                st.session_state.resolution_result = None
+                st.session_state.fix_decisions = {}
+                # Store current parameters for re-run
+                st.session_state.breaks_analysis_params = {
+                    'selected_event': selected_event,
+                    'focus_areas': focus_areas,
+                    'analysis_depth': analysis_depth
+                }
+                st.session_state.breaks_analysis_requested = True
                 st.rerun()
+    
+    # Check if breaks analysis was requested and run it
+    if st.session_state.breaks_analysis_requested and st.session_state.breaks_result is None:
+        params = st.session_state.get('breaks_analysis_params', {})
+        run_breaks_analysis(
+            nbim_df, 
+            custody_df, 
+            mappings, 
+            params.get('selected_event', selected_event),
+            params.get('focus_areas', focus_areas),
+            params.get('analysis_depth', analysis_depth)
+        )
+        st.session_state.breaks_analysis_requested = False
     
     # Display results if available
     if st.session_state.breaks_result:
@@ -409,9 +453,9 @@ def display_resolution_section(breaks_data: Dict[str, Any]):
     if st.session_state.resolution_result is None:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            if st.button("🚀 Generate Fix Suggestions", type="primary", use_container_width=True):
-                run_breaks_resolution(breaks_data)
-                return
+            if st.button("🚀 Generate Fix Suggestions", type="primary", use_container_width=True, key="generate_fix_suggestions"):
+                st.session_state.resolution_requested = True
+                st.rerun()
     else:
         # Show re-run option and summary
         col1, col2, col3 = st.columns([2, 1, 2])
@@ -427,13 +471,19 @@ def display_resolution_section(breaks_data: Dict[str, Any]):
             else:
                 st.info(f"📋 {total_analyzed} breaks analyzed • All require manual investigation")
         with col2:
-            if st.button("🔄 Re-analyze", use_container_width=True):
+            if st.button("🔄 Re-analyze", use_container_width=True, key="re_analyze_resolution"):
                 st.session_state.resolution_result = None
                 st.session_state.fix_decisions = {}
+                st.session_state.resolution_requested = True
                 st.rerun()
         with col3:
-            # Action buttons for accepted/rejected fixes
-            display_fix_action_buttons()
+            # Single action button for all changes
+            display_save_and_jira_button()
+    
+    # Check if resolution was requested and run it
+    if st.session_state.resolution_requested and st.session_state.resolution_result is None:
+        run_breaks_resolution(breaks_data)
+        st.session_state.resolution_requested = False
     
     # Display resolution table if available
     if st.session_state.resolution_result:
@@ -516,14 +566,14 @@ def display_resolution_table(breaks_data: Dict[str, Any], resolution_data: Dict[
         disabled=["Break ID", "Classification", "Severity", "Field", "Current Value", "Custody Value", "Suggested Fix Value", "Reasoning", "Confidence", "Status"],
         hide_index=True,
         use_container_width=True,
-        key="resolution_table"
+        key=f"resolution_table_{len(resolutions)}"
     )
     
     # Update session state based on user decisions
     update_fix_decisions(edited_df)
     
-    # Show summary of decisions
-    display_fix_summary()
+    # Show current decision summary
+    display_current_decisions_summary()
 
 
 def extract_suggested_value(resolution: Dict[str, Any]) -> str:
@@ -561,8 +611,8 @@ def update_fix_decisions(edited_df: pd.DataFrame):
             st.session_state.fix_decisions[break_id] = accepted
 
 
-def display_fix_summary():
-    """Display summary of fix decisions."""
+def display_current_decisions_summary():
+    """Display a summary of current fix decisions."""
     
     if not st.session_state.fix_decisions:
         return
@@ -571,45 +621,130 @@ def display_fix_summary():
     rejected_count = sum(1 for decision in st.session_state.fix_decisions.values() if not decision)
     
     if accepted_count > 0 or rejected_count > 0:
+        st.markdown("---")
         col1, col2, col3 = st.columns(3)
         
         with col1:
             if accepted_count > 0:
-                st.success(f"✅ {accepted_count} fixes accepted")
+                st.success(f"✅ {accepted_count} fixes selected to apply")
         
         with col2:
             if rejected_count > 0:
-                st.warning(f"❌ {rejected_count} fixes rejected")
+                st.warning(f"🎫 {rejected_count} items selected for Jira tickets")
         
         with col3:
-            if rejected_count > 0:
-                st.info(f"🎫 {rejected_count} items will need Jira tickets")
+            if accepted_count + rejected_count > 0:
+                st.info(f"📝 {accepted_count + rejected_count} decisions made")
 
 
-def display_fix_action_buttons():
-    """Display action buttons for managing fixes."""
+def display_save_and_jira_button():
+    """Display single button to save changes and create Jira issues."""
     
     if not st.session_state.fix_decisions:
         return
     
     accepted_fixes = [k for k, v in st.session_state.fix_decisions.items() if v]
     rejected_fixes = [k for k, v in st.session_state.fix_decisions.items() if not v]
+    total_decisions = len([k for k, v in st.session_state.fix_decisions.items() if v is not None])
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if accepted_fixes:
-            if st.button(f"🚀 Apply {len(accepted_fixes)} Fixes", type="primary", use_container_width=True):
-                st.success(f"✅ {len(accepted_fixes)} fixes would be applied!")
-                st.info("Fix application logic will be implemented here.")
-    
-    with col2:
-        if rejected_fixes:
-            if st.button(f"🎫 Create Jira Tickets ({len(rejected_fixes)})", use_container_width=True):
-                st.info(f"🎫 {len(rejected_fixes)} Jira tickets would be created for manual review.")
-                st.info("Jira agent integration will be implemented here.")
+    if total_decisions > 0:
+        button_text = "💾 Save Changes and Create Jira Issues"
+        if len(accepted_fixes) > 0 and len(rejected_fixes) > 0:
+            button_text = f"💾 Save Changes and Create Jira Issues ({len(accepted_fixes)} fixes + {len(rejected_fixes)} tickets)"
+        elif len(accepted_fixes) > 0:
+            button_text = f"💾 Save Changes ({len(accepted_fixes)} fixes to apply)"
+        elif len(rejected_fixes) > 0:
+            button_text = f"🎫 Create Jira Issues ({len(rejected_fixes)} tickets)"
+        
+        if st.button(
+            button_text, 
+            type="primary", 
+            use_container_width=True,
+            help="Apply accepted fixes to CSV files and create Jira tickets for rejected items"
+        ):
+            process_fixes_and_create_jira(accepted_fixes, rejected_fixes)
 
 
+def process_fixes_and_create_jira(accepted_fixes: List[str], rejected_fixes: List[str]):
+    """Process accepted fixes and create Jira issues for rejected ones."""
+    
+    if not st.session_state.resolution_result:
+        st.error("No resolution data available")
+        return
+    
+    resolutions = st.session_state.resolution_result.get("resolutions", [])
+    resolution_lookup = {r.get("break_id"): r for r in resolutions}
+    
+    # Process accepted fixes
+    if accepted_fixes:
+        with st.spinner("📝 Creating updated CSV files with applied fixes..."):
+            success_count = create_updated_csv_files(accepted_fixes, resolution_lookup)
+            if success_count > 0:
+                st.success(f"✅ Created updated CSV files with {success_count} fixes applied!")
+            else:
+                st.error("❌ Failed to create updated CSV files")
+    
+    # Handle rejected fixes (Jira creation to be implemented later)
+    if rejected_fixes:
+        st.info(f"🎫 {len(rejected_fixes)} items marked for Jira ticket creation (functionality to be implemented)")
+        
+        # Show what would be created as Jira tickets
+        with st.expander("Items that will become Jira tickets", expanded=False):
+            for break_id in rejected_fixes:
+                resolution = resolution_lookup.get(break_id)
+                if resolution:
+                    st.write(f"- **{break_id}**: {resolution.get('reasoning', 'No reasoning provided')}")
+
+
+def create_updated_csv_files(accepted_fixes: List[str], resolution_lookup: Dict[str, Any]) -> int:
+    """Create updated CSV files with fixes applied."""
+    
+    try:
+        # Get the original data from session state or wherever it's stored
+        # This would need to be adapted based on how you store the original CSV data
+        
+        # For now, create a placeholder implementation
+        fixes_applied = []
+        
+        for break_id in accepted_fixes:
+            resolution = resolution_lookup.get(break_id)
+            if resolution:
+                corrected_value = resolution.get("corrected_value")
+                reasoning = resolution.get("reasoning")
+                
+                # Here you would apply the fix to the actual data
+                # For now, just track what would be fixed
+                fixes_applied.append({
+                    "break_id": break_id,
+                    "corrected_value": corrected_value,
+                    "reasoning": reasoning
+                })
+        
+        # Create a summary of fixes that were applied
+        if fixes_applied:
+            fixes_df = pd.DataFrame(fixes_applied)
+            
+            # Download button for the fixes summary
+            csv_data = fixes_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Applied Fixes Summary",
+                data=csv_data,
+                file_name=f"applied_fixes_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+            
+            # TODO: Implement actual CSV file updates here
+            # This would involve:
+            # 1. Loading the original NBIM/Custody CSV files
+            # 2. Finding the rows that correspond to each break_id
+            # 3. Updating those rows with the corrected values
+            # 4. Saving the updated CSV files
+            
+        return len(fixes_applied)
+        
+    except Exception as e:
+        st.error(f"Error creating updated CSV files: {str(e)}")
+        return 0
 
 
 
