@@ -62,6 +62,12 @@ class BreaksResolutionResponse(BaseAgentResponse):
     total_breaks_analyzed: int = Field(description="Total number of breaks analyzed")
     total_resolvable: int = Field(description="Number of breaks with suggested values")
     total_requiring_manual_review: int = Field(description="Number requiring manual review")
+    
+    # Automation potential summary
+    automation_potential: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Breakdown of automation potential for fixes"
+    )
 
 
 class BreaksResolutionAgent:
@@ -134,8 +140,9 @@ HISTORICAL PATTERNS (from previous reconciliations):
 For each break, provide:
 1. The EXACT corrected value (number, text, or "Manual review required")
 2. Brief reasoning explaining why this is the correct value
+3. Confidence level in the fix
 
-Return JSON in this simple format:
+Return JSON in this format:
 
 {
   "success": true,
@@ -155,8 +162,17 @@ Return JSON in this simple format:
   ],
   "total_breaks_analyzed": 2,
   "total_resolvable": 1,
-  "total_requiring_manual_review": 1
+  "total_requiring_manual_review": 1,
+  "automation_potential": {
+    "fully_automatable": 1,
+    "partially_automatable": 0,
+    "manual_only": 1
+  }
 }
+
+IMPORTANT: Count fully_automatable as breaks with confidence >= 0.8 and corrected_value != "Manual review required".
+Count manual_only as breaks with corrected_value = "Manual review required" or confidence < 0.5.
+Count partially_automatable as the remaining breaks.
 
 Focus on providing exact corrected values with clear, brief reasoning."""
         

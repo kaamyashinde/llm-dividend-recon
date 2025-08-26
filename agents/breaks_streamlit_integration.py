@@ -202,8 +202,14 @@ def run_breaks_resolution(breaks_data: Dict[str, Any]):
             
             # Show quick summary
             total_resolutions = result.response.structured_data.get("total_breaks_analyzed", 0)
+            total_resolvable = result.response.structured_data.get("total_resolvable", 0)
+            manual_review = result.response.structured_data.get("total_requiring_manual_review", 0)
             automatable_count = result.response.structured_data.get("automation_potential", {}).get("fully_automatable", 0)
-            st.info(f"📋 Analyzed {total_resolutions} breaks. {automatable_count} can be fully automated.")
+            
+            if total_resolvable > 0:
+                st.success(f"📋 Analyzed {total_resolutions} breaks. {total_resolvable} have suggested fixes ({automatable_count} fully automatable, {manual_review} need manual review).")
+            else:
+                st.info(f"📋 Analyzed {total_resolutions} breaks. All require manual review.")
         else:
             error_msg = str(result.error) if result.error else "Resolution analysis validation failed"
             st.error(f"❌ Resolution analysis failed: {error_msg}")
@@ -414,7 +420,12 @@ def display_resolution_section(breaks_data: Dict[str, Any]):
             total_analyzed = resolution_data.get("total_breaks_analyzed", 0)
             total_resolvable = resolution_data.get("total_resolvable", 0)
             manual_review = resolution_data.get("total_requiring_manual_review", 0)
-            st.info(f"📋 {total_analyzed} breaks analyzed • {total_resolvable} have suggested values • {manual_review} need manual review")
+            automatable = resolution_data.get("automation_potential", {}).get("fully_automatable", 0)
+            
+            if total_resolvable > 0:
+                st.success(f"📋 {total_analyzed} breaks analyzed • {total_resolvable} fixes suggested • {automatable} automatable • {manual_review} manual review")
+            else:
+                st.info(f"📋 {total_analyzed} breaks analyzed • All require manual investigation")
         with col2:
             if st.button("🔄 Re-analyze", use_container_width=True):
                 st.session_state.resolution_result = None
@@ -438,7 +449,7 @@ def display_resolution_table(breaks_data: Dict[str, Any], resolution_data: Dict[
     resolutions = resolution_data.get("resolutions", [])
     
     if not resolutions:
-        st.warning("No fix suggestions available.")
+        st.warning("No fix suggestions were generated. This might indicate all breaks require manual investigation.")
         return
     
     # Create a mapping of break_id to break data for easy lookup
@@ -468,6 +479,7 @@ def display_resolution_table(breaks_data: Dict[str, Any], resolution_data: Dict[
             "Suggested Fix Value": suggested_value,
             "Reasoning": reasoning,
             "Confidence": f"{confidence:.0%}" if confidence > 0 else "Manual Review",
+            "Status": "Automated" if confidence >= 0.8 and suggested_value != "Manual review required" else "Manual Review",
             "Accept": current_decision if current_decision is not None else False
         })
     
@@ -489,6 +501,7 @@ def display_resolution_table(breaks_data: Dict[str, Any], resolution_data: Dict[
         "Suggested Fix Value": st.column_config.TextColumn("Suggested Fix Value", disabled=True, help="AI-suggested corrected value"),
         "Reasoning": st.column_config.TextColumn("Reasoning", disabled=True, help="AI's reasoning for the suggested value"),
         "Confidence": st.column_config.TextColumn("Confidence", disabled=True, help="AI's confidence in the suggestion"),
+        "Status": st.column_config.TextColumn("Status", disabled=True, help="Whether fix can be automated or requires manual review"),
         "Accept": st.column_config.CheckboxColumn(
             "Accept Fix",
             help="Check to accept this fix suggestion",
@@ -500,7 +513,7 @@ def display_resolution_table(breaks_data: Dict[str, Any], resolution_data: Dict[
     edited_df = st.data_editor(
         df,
         column_config=column_config,
-        disabled=["Break ID", "Classification", "Severity", "Field", "Current Value", "Custody Value", "Suggested Fix Value", "Reasoning", "Confidence"],
+        disabled=["Break ID", "Classification", "Severity", "Field", "Current Value", "Custody Value", "Suggested Fix Value", "Reasoning", "Confidence", "Status"],
         hide_index=True,
         use_container_width=True,
         key="resolution_table"
