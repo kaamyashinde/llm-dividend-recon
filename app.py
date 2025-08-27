@@ -242,19 +242,28 @@ def display_mapping_results(mappings_data: dict):
         
         with col1:
             if st.button("🔄 Start Over", use_container_width=True):
+                # Clear all mapping-related state
                 st.session_state.user_decisions = {}
                 st.session_state.custom_mappings = []
                 st.session_state.rejected_overrides = {}
                 st.session_state.mapping_result = None
                 st.session_state.mappings_applied = False
                 st.session_state.effective_mappings = None
+                
                 # Clear breaks and resolution results
                 if "breaks_result" in st.session_state:
-                    st.session_state.breaks_result = None
+                    del st.session_state.breaks_result
                 if "resolution_result" in st.session_state:
-                    st.session_state.resolution_result = None
+                    del st.session_state.resolution_result
                 if "fix_decisions" in st.session_state:
-                    st.session_state.fix_decisions = {}
+                    del st.session_state.fix_decisions
+                    
+                # Clear any analysis flags
+                if "breaks_analysis_requested" in st.session_state:
+                    del st.session_state.breaks_analysis_requested
+                if "resolution_requested" in st.session_state:
+                    del st.session_state.resolution_requested
+                    
                 st.rerun()
         
         with col2:
@@ -666,10 +675,11 @@ if nbim_file is not None:
             if not mappings:
                 mappings = None
         
-        # Only run reconciliation when user applies mappings
+        # Only run reconciliation when user applies mappings AND breaks haven't been analyzed yet
         if AGENT_AVAILABLE and getattr(st.session_state, 'mappings_applied', False):
             effective_mappings = getattr(st.session_state, 'effective_mappings', None)
-            if effective_mappings:
+            # Add guard: only run if we don't already have breaks results
+            if effective_mappings and not hasattr(st.session_state, 'breaks_result'):
                 try:
                     from agents.breaks_identifier_agent import BreaksIdentifierAgent
                     agent = BreaksIdentifierAgent()
@@ -688,6 +698,8 @@ if nbim_file is not None:
                         ))
                     if agent.validate_breaks(result):
                         st.success("✅ Breaks analysis completed!")
+                        # Store the result to prevent re-running
+                        st.session_state.breaks_result = result.response.structured_data
                         # Ensure resolution_result session state is initialized
                         if "resolution_result" not in st.session_state:
                             st.session_state.resolution_result = None
@@ -697,6 +709,11 @@ if nbim_file is not None:
                         st.error(f"❌ Breaks analysis failed: {err}")
                 except Exception as e:
                     st.error(f"🚨 Error running breaks identification: {e}")
+            elif effective_mappings and hasattr(st.session_state, 'breaks_result'):
+                # Display existing results without re-running analysis
+                if "resolution_result" not in st.session_state:
+                    st.session_state.resolution_result = None
+                display_breaks_results(st.session_state.breaks_result)
             else:
                 st.info("Apply mappings to run reconciliation analysis.")
         else:

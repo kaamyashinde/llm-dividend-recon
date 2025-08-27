@@ -472,9 +472,11 @@ def display_resolution_section(breaks_data: Dict[str, Any]):
                 st.info(f"📋 {total_analyzed} breaks analyzed • All require manual investigation")
         with col2:
             if st.button("🔄 Re-analyze", use_container_width=True, key="re_analyze_resolution"):
+                # Only reset resolution data, not breaks data
                 st.session_state.resolution_result = None
                 st.session_state.fix_decisions = {}
                 st.session_state.resolution_requested = True
+                # Don't trigger breaks analysis
                 st.rerun()
         with col3:
             # Single action button for all changes
