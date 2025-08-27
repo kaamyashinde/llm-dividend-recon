@@ -2,7 +2,7 @@
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Streamlit](https://img.shields.io/badge/streamlit-1.28+-red.svg)](https://streamlit.io/)
-[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4-green.svg)](https://openai.com/)
+[![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-green.svg)](https://openai.com/)
 
 > **An intelligent, AI-powered system for reconciling dividend data between NBIM internal booking systems and global custodian records, built for the NBIM Technology and Operations Pre-case Assessment.**
 
@@ -76,8 +76,14 @@ graph TD
 
 3. **Set up environment variables**
    ```bash
-   # Create .env file
-   echo "OPENAI_API_KEY=your_openai_api_key_here" > .env
+   # Create .env file with GPT-4o model (latest and fastest)
+   cat > .env << EOF
+   OPENAI_API_KEY=your_openai_api_key_here
+   OPENAI_MODEL=gpt-4o
+   OPENAI_TEMPERATURE=0.1
+   OPENAI_MAX_TOKENS=4000
+   OPENAI_TIMEOUT=60
+   EOF
    ```
 
 4. **Run the application**
@@ -122,7 +128,7 @@ llm-dividend-recon/
 - **Composite Key Matching**: Advanced record linking using multiple identifiers
 
 ### **Model Usage**
-- **Primary**: OpenAI GPT-4 for complex reasoning
+- **Primary**: OpenAI GPT-4o (latest and fastest GPT-4 variant) for complex reasoning
 - **Fallback**: GPT-3.5-turbo for cost optimization
 - **Temperature**: 0.1 for consistent financial analysis
 - **Response Format**: Structured JSON for reliable parsing
