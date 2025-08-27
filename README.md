@@ -189,9 +189,6 @@ The system handles **3 dividend events** with varying complexity:
 ```bash
 # Unit tests
 python -m pytest agents/__tests__/ -v
-
-# Integration tests
-python -m pytest tests/integration/ -v
 ```
 
 ### **Debugging**
