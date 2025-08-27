@@ -1,1 +1,3 @@
-# Ignore the Virtual Environment
+# Ignore the test data folder
+data/
+.env
