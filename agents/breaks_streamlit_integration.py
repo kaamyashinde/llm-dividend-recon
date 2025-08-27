@@ -14,6 +14,7 @@ import json
 # Import the breaks identifier and resolution agents
 from agents.breaks_identifier_agent import BreaksIdentifierAgent
 from agents.breaks_resolution_agent import BreaksResolutionAgent
+from agents.jira_issue_agent import JiraIssueAgent
 from utils import logger
 
 
@@ -490,6 +491,9 @@ def display_resolution_section(breaks_data: Dict[str, Any]):
     # Display resolution table if available
     if st.session_state.resolution_result:
         display_resolution_table(breaks_data, st.session_state.resolution_result)
+        
+        # Add JIRA configuration section
+        display_jira_configuration_section()
     else:
         st.info("Click 'Generate Fix Suggestions' to get AI-powered recommendations for fixing these breaks.")
 
@@ -686,16 +690,15 @@ def process_fixes_and_create_jira(accepted_fixes: List[str], rejected_fixes: Lis
             else:
                 st.error("❌ Failed to create updated CSV files")
     
-    # Handle rejected fixes (Jira creation to be implemented later)
+    # Handle rejected fixes - Create actual JIRA tickets
     if rejected_fixes:
-        st.info(f"🎫 {len(rejected_fixes)} items marked for Jira ticket creation (functionality to be implemented)")
-        
-        # Show what would be created as Jira tickets
-        with st.expander("Items that will become Jira tickets", expanded=False):
-            for break_id in rejected_fixes:
-                resolution = resolution_lookup.get(break_id)
-                if resolution:
-                    st.write(f"- **{break_id}**: {resolution.get('reasoning', 'No reasoning provided')}")
+        with st.spinner(f"🎫 Creating JIRA tickets for {len(rejected_fixes)} items requiring manual review..."):
+            jira_success = create_jira_tickets_for_rejected_fixes(rejected_fixes, resolution_lookup)
+            
+            if jira_success:
+                st.success(f"✅ Successfully created {len(rejected_fixes)} JIRA tickets for manual review items!")
+            else:
+                st.error("❌ Failed to create JIRA tickets. See details below.")
 
 
 def create_updated_csv_files(accepted_fixes: List[str], resolution_lookup: Dict[str, Any]) -> int:
@@ -747,6 +750,260 @@ def create_updated_csv_files(accepted_fixes: List[str], resolution_lookup: Dict[
     except Exception as e:
         st.error(f"Error creating updated CSV files: {str(e)}")
         return 0
+
+
+def create_jira_tickets_for_rejected_fixes(rejected_fixes: List[str], resolution_lookup: Dict[str, Any]) -> bool:
+    """Create JIRA tickets for rejected fixes that require manual review."""
+    
+    try:
+        # Check if OpenAI API key is available
+        import os
+        if not os.getenv("OPENAI_API_KEY"):
+            st.error("🔑 OpenAI API key not found! Please add OPENAI_API_KEY to your .env file for JIRA ticket generation.")
+            return False
+        # Get the original breaks data from session state
+        if not hasattr(st.session_state, 'breaks_result') or not st.session_state.breaks_result:
+            st.error("❌ No breaks data available for JIRA ticket creation")
+            return False
+            
+        breaks_data = st.session_state.breaks_result
+        all_breaks = breaks_data.get("breaks", [])
+        
+        # Get breaks data for rejected fixes
+        breaks_for_jira = []
+        break_lookup = {b.get("break_id"): b for b in all_breaks}
+        
+        for break_id in rejected_fixes:
+            break_data = break_lookup.get(break_id)
+            if break_data:
+                breaks_for_jira.append(break_data)
+        
+        if not breaks_for_jira:
+            st.warning("⚠️ No break data found for selected rejected fixes")
+            return False
+        
+        # Create JIRA agent and generate tickets
+        jira_agent = JiraIssueAgent()
+        
+        # Build additional context for JIRA tickets
+        additional_context = f"""
+        These breaks were identified during dividend reconciliation analysis.
+        They were marked as requiring manual review by the reconciliation team.
+        
+        Total breaks requiring manual review: {len(breaks_for_jira)}
+        Analysis timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        
+        Each ticket represents a discrepancy that could not be automatically resolved
+        and requires investigation by the reconciliation team.
+        """
+        
+        # Get resolution data for context
+        resolution_data = st.session_state.resolution_result if hasattr(st.session_state, 'resolution_result') else None
+        
+        # Get JIRA configuration from user settings or use defaults
+        user_jira_config = getattr(st.session_state, 'jira_config', {})
+        jira_config = {
+            "project_key": user_jira_config.get("project_key", "RECON"),
+            "default_assignee": user_jira_config.get("default_assignee", "reconciliation-team"),
+            "component": user_jira_config.get("component", "Dividend Reconciliation"),
+            "default_priority": user_jira_config.get("default_priority", "Medium"),
+            "labels": user_jira_config.get("labels", ["reconciliation", "dividend", "breaks", "manual-review"]),
+            "epic_link": user_jira_config.get("epic_link"),
+            "custom_fields": {
+                "reconciliation_date": datetime.now().strftime('%Y-%m-%d'),
+                "system_source": "NBIM-Custody Reconciliation"
+            }
+        }
+        
+        # Create JIRA tickets
+        result = asyncio.run(jira_agent.create_jira_issues(
+            breaks=breaks_for_jira,
+            resolution_data=resolution_data,
+            jira_config=jira_config,
+            additional_context=additional_context.strip(),
+            timeout=120.0
+        ))
+        
+        # Validate and process results
+        if jira_agent.validate_jira_issues(result):
+            jira_data = result.response.structured_data
+            
+            # Display success summary
+            total_created = jira_data.get("total_issues_created", 0)
+            if total_created > 0:
+                st.success(f"🎫 Created {total_created} JIRA tickets successfully!")
+                
+                # Show breakdown by priority if available
+                priority_breakdown = jira_data.get("issues_by_priority", {})
+                if priority_breakdown:
+                    st.info(f"📊 Priority breakdown: " + ", ".join([f"{p}: {c}" for p, c in priority_breakdown.items()]))
+                
+                # Provide download option for JIRA CSV
+                display_jira_download_option(jira_data)
+                
+                # Show preview of created tickets
+                display_jira_tickets_preview(jira_data)
+                
+                return True
+            else:
+                st.error("❌ No JIRA tickets were created")
+                return False
+        else:
+            error_msg = str(result.error) if result.error else "JIRA ticket validation failed"
+            st.error(f"❌ JIRA ticket creation failed: {error_msg}")
+            return False
+            
+    except Exception as e:
+        st.error(f"🚨 Error creating JIRA tickets: {str(e)}")
+        logger.error(f"JIRA ticket creation error: {e}")
+        return False
+
+
+def display_jira_download_option(jira_data: Dict[str, Any]):
+    """Display download option for JIRA CSV."""
+    
+    jira_issues = jira_data.get("jira_issues", [])
+    if not jira_issues:
+        return
+    
+    # Convert JIRA issues to DataFrame
+    jira_df = pd.DataFrame(jira_issues)
+    
+    # Create CSV for download
+    csv_data = jira_df.to_csv(index=False)
+    
+    # Download button
+    st.download_button(
+        label="📥 Download JIRA Import CSV",
+        data=csv_data,
+        file_name=f"jira_tickets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        help="Download CSV file to import tickets directly into JIRA",
+        use_container_width=True
+    )
+
+
+def display_jira_tickets_preview(jira_data: Dict[str, Any]):
+    """Display a preview of the created JIRA tickets."""
+    
+    jira_issues = jira_data.get("jira_issues", [])
+    if not jira_issues:
+        return
+    
+    with st.expander(f"📋 Preview of {len(jira_issues)} JIRA Tickets Created", expanded=False):
+        
+        # Show summary table
+        preview_data = []
+        for issue in jira_issues[:10]:  # Limit to first 10 for preview
+            preview_data.append({
+                "Key": issue.get("issue_key", "N/A"),
+                "Title": issue.get("summary", "No title")[:50] + "..." if len(issue.get("summary", "")) > 50 else issue.get("summary", ""),
+                "Priority": issue.get("priority", "Medium"),
+                "Type": issue.get("issue_type", "Task"),
+                "Assignee": issue.get("assignee", "Unassigned")
+            })
+        
+        if preview_data:
+            preview_df = pd.DataFrame(preview_data)
+            st.dataframe(preview_df, use_container_width=True)
+            
+            if len(jira_issues) > 10:
+                st.info(f"Showing first 10 of {len(jira_issues)} tickets. Download CSV to see all tickets.")
+        
+        # Show detailed view of first ticket
+        if jira_issues:
+            st.markdown("#### Sample Ticket Details:")
+            sample_issue = jira_issues[0]
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**Key:** {sample_issue.get('issue_key', 'N/A')}")
+                st.write(f"**Priority:** {sample_issue.get('priority', 'Medium')}")
+                st.write(f"**Type:** {sample_issue.get('issue_type', 'Task')}")
+            with col2:
+                st.write(f"**Component:** {sample_issue.get('component', 'Reconciliation')}")
+                st.write(f"**Labels:** {', '.join(sample_issue.get('labels', []))}")
+                st.write(f"**Assignee:** {sample_issue.get('assignee', 'Unassigned')}")
+            
+            st.markdown("**Summary:**")
+            st.write(sample_issue.get('summary', 'No summary available'))
+            
+            st.markdown("**Description:**")
+            description = sample_issue.get('description', 'No description available')
+            if len(description) > 300:
+                st.write(description[:300] + "...")
+                with st.expander("Show full description"):
+                    st.write(description)
+            else:
+                st.write(description)
+
+
+def display_jira_configuration_section():
+    """Display JIRA configuration options for users to customize ticket creation."""
+    
+    with st.expander("⚙️ JIRA Ticket Configuration (Optional)", expanded=False):
+        st.markdown("Customize how JIRA tickets will be created for manual review items:")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            jira_project = st.text_input(
+                "JIRA Project Key",
+                value="RECON",
+                help="The project key where tickets will be created",
+                key="jira_project_key"
+            )
+            
+            jira_component = st.text_input(
+                "Component",
+                value="Dividend Reconciliation",
+                help="Component to assign to the tickets",
+                key="jira_component"
+            )
+            
+            jira_assignee = st.text_input(
+                "Default Assignee",
+                value="reconciliation-team",
+                help="Default assignee for the tickets (username or team)",
+                key="jira_assignee"
+            )
+        
+        with col2:
+            jira_priority = st.selectbox(
+                "Default Priority",
+                options=["Low", "Medium", "High", "Highest"],
+                index=1,  # Default to Medium
+                help="Default priority for manual review tickets",
+                key="jira_priority"
+            )
+            
+            jira_labels = st.text_input(
+                "Labels (comma-separated)",
+                value="reconciliation,dividend,breaks,manual-review",
+                help="Labels to add to the tickets",
+                key="jira_labels"
+            )
+            
+            jira_epic = st.text_input(
+                "Epic Link (optional)",
+                value="",
+                help="Link tickets to an epic (epic key)",
+                key="jira_epic"
+            )
+        
+        st.markdown("**Note:** These settings will be used when creating JIRA tickets for items requiring manual review.")
+        
+        # Store configuration in session state
+        jira_config = {
+            "project_key": jira_project,
+            "default_assignee": jira_assignee,
+            "component": jira_component,
+            "default_priority": jira_priority,
+            "labels": [label.strip() for label in jira_labels.split(",") if label.strip()],
+            "epic_link": jira_epic if jira_epic else None
+        }
+        
+        st.session_state.jira_config = jira_config
 
 
 
